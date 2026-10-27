@@ -8,6 +8,8 @@ const $ = (sel, el = document) => el.querySelector(sel);
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const app = $('#app');
 const CACHE = 'gas-data-v1';
+// Inside the Android app the data is part of the app itself: nothing to cache.
+const NATIVE = new URLSearchParams(location.search).has('android');
 
 let BOOK = null;          // { contents, pages, figures }
 let KEY = null;           // CryptoKey
@@ -44,6 +46,7 @@ async function gunzip(buf) {
   return new Response(s).arrayBuffer();
 }
 async function fetchData(path) {
+  if (NATIVE) { const r = await fetch(path); if (!r.ok) throw new Error(path + ': ' + r.status); return r.arrayBuffer(); }
   const c = await caches.open(CACHE);
   let r = await c.match(path);
   if (!r) { r = await fetch(path, { cache: 'no-cache' }); if (!r.ok) throw new Error(path + ': ' + r.status); await c.put(path, r.clone()); }
@@ -52,7 +55,7 @@ async function fetchData(path) {
 
 // ---------- start ----------
 async function start() {
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+  if (!NATIVE && 'serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
   try {
     META = JSON.parse(new TextDecoder().decode(await fetchData('data/meta.json')));
   } catch (e) { return fatal('The book data could not be loaded. Open the app once with a connection.'); }
@@ -96,7 +99,7 @@ async function load() {
 
 // Keep every page scan on the phone, so the original pages work offline too.
 async function offline() {
-  if (prefs.get('offline', '') === META.version) return;
+  if (NATIVE || prefs.get('offline', '') === META.version) return;
   const c = await caches.open(CACHE);
   let done = 0; const all = BOOK.pages.map(p => `data/scans/${p.scan}.bin`);
   for (const path of all) {
