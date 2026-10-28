@@ -110,3 +110,14 @@ a.btn, a.card, a.chap { text-decoration: none; }
 .turn-prev { animation: turnPrev .28s ease-out; }
 @keyframes turnNext { from { transform: translateX(28%) rotateY(-8deg); opacity: .2; } to { transform: none; opacity: 1; } }
 @keyframes turnPrev { from { transform: translateX(-28%) rotateY(8deg); opacity: .2; } to { transform: none; opacity: 1; } }
+/* The book's index */
+.letters { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0 10px; }
+.letters a { min-width: 30px; text-align: center; padding: 4px 6px; border-radius: 6px; background: var(--surface); color: var(--primary); text-decoration: none; font-weight: 600; }
+.ix { background: var(--surface); padding: 8px 12px; border-bottom: 1px solid var(--line); scroll-margin-top: 80px; }
+.ix.sub { padding-left: 30px; }
+.ix .term { margin-right: 8px; }
+.ix .term a { color: var(--primary); }
+.ix.sub .term { color: var(--sub); }
+.pg { display: inline-block; margin: 2px 3px; padding: 1px 8px; border-radius: 10px; background: var(--chip, #E7EDF4); color: var(--primary); text-decoration: none; font-size: 14px; }
+.pg.off { opacity: .5; }
+@media (prefers-color-scheme: dark) { .pg { background: #243244; } }

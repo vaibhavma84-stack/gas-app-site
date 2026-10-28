@@ -297,7 +297,7 @@ function bookHome(B, tab) {
       <div class="bsub">${B.pages.length} pages</div></div></div>
     ${last !== null && B.pages[last] ? `<a class="btn fill wide" href="#/b/${B.id}/p/${last}">Continue reading: page ${esc(B.pages[last].label)}</a>` : `<a class="btn fill wide" href="#/b/${B.id}/p/0">Open the book</a>`}
     <input class="search" id="q" type="search" placeholder="Search this book" value="${esc(prefs.get('q.' + B.id, ''))}" style="margin-top:8px">
-    <div class="tabs">${['Contents', 'Figures', 'Bookmarks', 'Go to page'].map(t => `<button class="btn ${t === tab ? 'on' : ''}" data-tab="${t}">${t}</button>`).join('')}</div>
+    <div class="tabs">${['Contents', 'Index', 'Figures', 'Bookmarks', 'Go to page'].filter(t => t !== 'Index' || (B.index || []).length).map(t => `<button class="btn ${t === tab ? 'on' : ''}" data-tab="${t}">${t}</button>`).join('')}</div>
     <div id="list"></div></div>`;
   imageUrl(D(B.id, 'scans/' + B.pages[0].scan + '.bin')).then(u => { $('#cov').src = u; }).catch(() => {});
   app.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => { prefs.set('tab', b.dataset.tab); bookHome(B, b.dataset.tab); });
@@ -306,7 +306,7 @@ function bookHome(B, tab) {
     const q = $('#q').value.trim(); prefs.set('q.' + B.id, q);
     $('.tabs').style.display = q.length >= 2 ? 'none' : '';
     if (q.length >= 2) return results(list, q, search(B, q), false);
-    ({ Contents: contents, Figures: figures, Bookmarks: bookmarks, 'Go to page': goTo }[tab] || contents)(B, list);
+    ({ Contents: contents, Index: bookIndex, Figures: figures, Bookmarks: bookmarks, 'Go to page': goTo }[tab] || contents)(B, list);
   };
   $('#q').oninput = () => { clearTimeout(searchTimer); searchTimer = setTimeout(show, 250); };
   show();
@@ -317,6 +317,31 @@ function contents(B, list) {
     if (lv === 0) return i === null ? `<span class="chap">${t}</span>` : `<a class="chap" href="#/b/${B.id}/p/${i}">${t}</a>`;
     return card(i === null ? 'javascript:void 0' : `#/b/${B.id}/p/${i}`, t, i === null ? `page ${esc(page)} · not in the scan` : `page ${esc(page)}`, (lv - 1) * 14);
   }).join('');
+}
+// The book's own index: every page number opens the page with the term marked.
+function bookIndex(B, list) {
+  const entries = B.index || [];
+  list.innerHTML = `<input class="search" id="ix" type="search" placeholder="Filter the index" style="margin:10px 0 4px">
+    <p class="hint">Tap a page number to open it with the word marked. An entry without numbers searches the book.</p>
+    <div class="letters">${[...new Set(entries.filter(e => !e[0]).map(e => e[1][0].toUpperCase()).filter(c => /[A-Z]/.test(c)))].sort().map(c => `<a href="javascript:void 0" data-l="${c}">${c}</a>`).join('')}</div>
+    <div id="ixl"></div>`;
+  let main = '';
+  const rows = entries.map(([lv, term, refs]) => {
+    if (!lv) main = term;
+    const word = (lv ? term : main).replace(/\(.*?\)/g, '').trim();
+    const qs = '?q=' + encodeURIComponent(word);
+    const links = refs.map(r => { const i = indexOf(B, r); return i === null ? `<span class="pg off">${esc(r)}</span>` : `<a class="pg" href="#/b/${B.id}/p/${i}${qs}">${esc(r)}</a>`; }).join('');
+    const name = refs.length ? esc(term) : `<a href="#/b/${B.id}?tab=Contents" data-search="${esc(word)}">${esc(term)}</a>`;
+    return { key: (main + ' ' + term).toLowerCase(), letter: lv ? '' : term[0].toUpperCase(),
+      html: `<div class="ix ${lv ? 'sub' : ''}"${lv ? '' : ` data-letter="${esc(term[0].toUpperCase())}"`}><span class="term">${name}</span>${links}</div>` };
+  });
+  const draw = f => {
+    $('#ixl').innerHTML = rows.filter(r => !f || r.key.includes(f)).map(r => r.html).join('') || '<p class="hint">No entry matches.</p>';
+    for (const a of list.querySelectorAll('[data-search]')) a.onclick = e => { e.preventDefault(); prefs.set('q.' + B.id, a.dataset.search); prefs.set('tab', 'Contents'); bookHome(B, 'Contents'); };
+  };
+  draw('');
+  $('#ix').oninput = () => draw($('#ix').value.trim().toLowerCase());
+  for (const a of list.querySelectorAll('[data-l]')) a.onclick = () => { const t = list.querySelector(`[data-letter="${a.dataset.l}"]`); if (t) t.scrollIntoView({ block: 'start' }); };
 }
 function figures(B, list) {
   const crops = Object.entries(B.crops || {});
