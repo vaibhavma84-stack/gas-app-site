@@ -64,7 +64,10 @@ async function start() {
   if (!NATIVE && 'serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
   try {
     META = JSON.parse(new TextDecoder().decode(await fetchData('data/meta.json')));
-  } catch (e) { return fatal('The library could not be loaded. Open the app once with a connection.'); }
+  } catch (e) { META = null; }
+  // With a connection, take any newer version straight away.
+  if (!NATIVE && await autoUpdate()) return;
+  if (!META) return fatal('The library could not be loaded. Open the app once with a connection.');
   const stored = await kvGet('key');
   if (stored && stored.v === META.version) {
     KEY = stored.k;
@@ -127,6 +130,30 @@ async function offline() {
 }
 
 // ---------- updates ----------
+// On opening: fetch the newest data list; if it differs from the saved one,
+// drop the files that changed (and anything no longer published), refresh the
+// app files and reload once. Offline, carry on with what is saved.
+async function autoUpdate() {
+  let fresh;
+  try { const r = await fetch('data/meta.json', { cache: 'no-store' }); if (!r.ok) return false; fresh = await r.json(); }
+  catch { return false; }
+  if (META && fresh.build === META.build) return false;
+  const c = await caches.open(CACHE);
+  const was = (META && META.files) || null, now = fresh.files || {};
+  for (const req of await c.keys()) {
+    const path = new URL(req.url).pathname.replace(/^.*?\/data\//, 'data/');
+    if (path === 'data/meta.json') continue;
+    if (!(path in now) || !was || was[path] !== now[path]) await c.delete(req);
+  }
+  await c.put('data/meta.json', new Response(JSON.stringify(fresh), { headers: { 'Content-Type': 'application/json' } }));
+  if (!META) { META = fresh; return false; }
+  for (const k of await caches.keys()) if (k.startsWith('gas-shell-')) await caches.delete(k);
+  try { const reg = await navigator.serviceWorker.getRegistration(); if (reg) await reg.update(); } catch {}
+  if (sessionStorage.getItem('gas.reloaded') === fresh.build) { META = fresh; return false; }
+  sessionStorage.setItem('gas.reloaded', fresh.build);
+  location.reload();
+  return true;
+}
 // iPhone (web): fetch the newest data list, drop only the files that changed,
 // refresh the app files and reload. Android: the books are inside the APK, so
 // open the download page for the newest APK.
