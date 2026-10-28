@@ -101,7 +101,7 @@ async function load() {
 async function offline() {
   if (NATIVE || prefs.get('offline', '') === META.version) return;
   const c = await caches.open(CACHE);
-  let done = 0; const all = BOOK.pages.map(p => `data/scans/${p.scan}.bin`);
+  let done = 0; const all = [...Object.keys(BOOK.crops || {}).map(k => `data/figs/${encodeURIComponent(k)}.bin`), ...BOOK.pages.map(p => `data/scans/${p.scan}.bin`)];
   for (const path of all) {
     if (!(await c.match(path))) {
       try { const r = await fetch(path); if (r.ok) await c.put(path, r); } catch { return; }
@@ -168,6 +168,7 @@ function route() {
   window.scrollTo(0, 0);
   if (parts[0] === 'p') return pageView(+parts[1], q.get('q') || '');
   if (parts[0] === 'scan') return scanView(+parts[1]);
+  if (parts[0] === 'fig') return figView(decodeURIComponent(parts[1] || ''));
   if (parts[0] === 'calc') return calcView(parts[1]);
   home(q.get('tab') || prefs.get('tab', 'Contents'));
 }
@@ -203,14 +204,31 @@ function contents(list) {
   }).join('');
 }
 function figures(list) {
-  const re = /^(Figure|Table)\s+\d+\.\d+[a-z]?\b/;
-  const out = [];
-  for (const p of BOOK.pages) for (const b of p.b) {
-    if (b[0] === 'fig' || b[0] === 'table') out.push([b[1], p]);
-    if (b[0] === 'ocr') for (const l of b[1].split('\n')) if (re.test(l.trim())) out.push([l.trim(), p]);
+  const crops = Object.entries(BOOK.crops || {});
+  list.innerHTML = `<p class="hint">Every figure in the book, in order. Tap one to see it.</p>` +
+    crops.map(([k, c]) => card(`#/fig/${encodeURIComponent(k)}`, esc(c.caption), 'page ' + esc(c.page))).join('');
+}
+// The crop holding figure id ("2.21"), if the book's figure was cut from the scan.
+function cropFor(id) {
+  for (const [k, c] of Object.entries(BOOK.crops || {})) if (c.ids.includes(id)) return k;
+  return null;
+}
+const figImg = k => `<img class="bookfig" data-fig="${esc(k)}" alt="">`;
+async function loadFigs() {
+  for (const img of app.querySelectorAll('img[data-fig]')) {
+    try {
+      const buf = await decrypt(await fetchData(`data/figs/${encodeURIComponent(img.dataset.fig)}.bin`));
+      img.src = URL.createObjectURL(new Blob([buf], { type: 'image/webp' }));
+    } catch { img.replaceWith(Object.assign(document.createElement('div'), { className: 'nofig', textContent: 'Figure not saved on the phone yet. Open the app once with a connection.' })); }
   }
-  list.innerHTML = `<p class="hint">Every figure and table, in page order. Tap one to open its page.</p>` +
-    out.map(([c, p]) => card(`#/p/${p.i}`, esc(c), 'page ' + esc(p.label))).join('');
+}
+function figView(k) {
+  const c = (BOOK.crops || {})[k]; if (!c) return go('/');
+  const i = BOOK.pages.findIndex(p => p.scan === c.seq);
+  app.innerHTML = bar('Figure ' + c.ids.join(' and '), 'page ' + c.page) +
+    `<div class="wrap page"><figure>${figImg(k)}<figcaption>${esc(c.caption)}</figcaption></figure>
+    ${i >= 0 ? `<a class="btn fill wide" href="#/p/${i}">Open the page</a>` : ''}</div>`;
+  loadFigs();
 }
 function calcList(list) {
   list.innerHTML = `<p class="hint">The book's numericals as working calculators. Each one can be filled with the book's own worked example.</p>` +
@@ -244,6 +262,10 @@ function pageView(i, q) {
   let h = '';
   if (!p.proof) h += `<div class="draft">Draft text read by OCR, not yet checked against the book. Words may be missing or wrong: tap Original page to see the scan.</div>`;
   for (const b of p.b) h += block(b, ts);
+  if (!p.proof) {
+    const here = Object.entries(BOOK.crops || {}).filter(([, c]) => c.seq === p.scan);
+    if (here.length) h += `<div class="grp" style="margin-top:20px">Figures on this page</div>` + here.map(([k, c]) => `<figure>${figImg(k)}<figcaption>${esc(c.caption)}</figcaption></figure>`).join('');
+  }
   const qs = q ? '?q=' + encodeURIComponent(q) : '';
   app.innerHTML = bar('Page ' + p.label, s ? (s[1] + '  ' + s[2]).trim() : '') +
     `<div class="wrap page" id="pg">${h}</div>
@@ -258,6 +280,7 @@ function pageView(i, q) {
   };
   swipe($('#pg'), d => { const n = i + d; if (BOOK.pages[n]) go(`/p/${n}${qs}`); });
   const first = $('#pg mark'); if (first) first.scrollIntoView({ block: 'center' });
+  loadFigs();
 }
 function block(b, ts) {
   const [k, t, x] = b;
@@ -272,8 +295,8 @@ function block(b, ts) {
     case 'note': return `<div class="note">${rich(t, ts)}</div>`;
     case 'warn': return `<div class="warn">${rich(t, ts)}</div>`;
     case 'eq': return `<div class="eq">${rich(t, ts)}</div>`;
-    case 'fig': { const f = x && BOOK.figures[x[0]];
-      return `<figure>${f ? svg(f) : '<div class="nofig">Figure not yet redrawn. Tap Original page to see it.</div>'}<figcaption>${rich(t, ts)}</figcaption></figure>`; }
+    case 'fig': { const f = x && BOOK.figures[x[0]], k = x && cropFor(x[0]);
+      return `<figure>${k ? figImg(k) : f ? svg(f) : '<div class="nofig">Tap Original page to see this figure.</div>'}<figcaption>${rich(t, ts)}</figcaption></figure>`; }
     case 'table': return `<div class="tbl"><table>${(x || []).map((r, ri) => `<tr>${r.map(c => ri ? `<td>${rich(c, ts)}</td>` : `<th>${rich(c, ts)}</th>`).join('')}</tr>`).join('')}</table></div><div class="tcap">${rich(t, ts)}</div>`;
     case 'calc': return `<a class="btn fill wide" href="#/calc/${esc(x && x[0])}">Open calculator: ${esc(t)}</a>`;
     case 'blank': return `<p class="hint" style="text-align:center;margin-top:40px">Blank page in the book.</p>`;
@@ -308,7 +331,8 @@ function svg(f) {
       out.push(`<polygon points="${bx},${by} ${bx - hd * Math.cos(a - .45)},${by - hd * Math.sin(a - .45)} ${bx - hd * Math.cos(a + .45)},${by - hd * Math.sin(a + .45)}" fill="${stroke}"/>`);
     } else if (s.t === 'text') {
       const anchor = { l: 'start', r: 'end' }[s.a] || 'middle';
-      out.push(`<text x="${s.p[0]}" y="${s.p[1]}" font-size="${s.w || 2.6}" fill="${s.fill || '#1A1A1A'}" text-anchor="${anchor}"${s.bold ? ' font-weight="700"' : ''} font-family="-apple-system, sans-serif">${esc(s.s)}</text>`);
+      const font = s.mono ? 'ui-monospace, Menlo, Consolas, monospace" xml:space="preserve' : '-apple-system, sans-serif';
+      out.push(`<text x="${s.p[0]}" y="${s.p[1]}" font-size="${s.w || 2.6}" fill="${s.fill || '#1A1A1A'}" text-anchor="${anchor}"${s.bold ? ' font-weight="700"' : ''} font-family="${font}">${esc(s.s)}</text>`);
     }
   }
   for (const l of f.labels || []) {

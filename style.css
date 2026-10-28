@@ -77,3 +77,4 @@ a.btn, a.card, a.chap { text-decoration: none; }
 .terms dd { margin: 0 0 0 14px; color: var(--sub); font-size: 15px; }
 .steps li { margin: 5px 0; }
 .page.wrap { min-height: calc(100vh - 150px); }
+.page img.bookfig { width: 100%; display: block; border-radius: 8px; background: #fff; min-height: 60px; }
