@@ -12,7 +12,7 @@ const XI = [0.9149, 0.0752, 0.0073, 0.0009, 0.0010, 0, 0, 0, 0.0007, 0];
 
 const CALCS = [
   {
-    id: 'lpg', title: 'LPG cargo quantity (weight in air)', ref: 'Sections 8.5.2 and 8.6', page: '401',
+    book: 'lghp4', id: 'lpg', title: 'LPG cargo quantity (weight in air)', ref: 'Sections 8.5.2 and 8.6', page: '401',
     inputs: [
       ['gauge', 'Gauge reading of liquid depth', 'm', 'Liquid level'],
       ['trim', 'Correction for trim', 'mm', 'Liquid level'],
@@ -69,7 +69,7 @@ const CALCS = [
     },
   },
   {
-    id: 'vapdens', title: 'Vapour density from the ideal gas laws', ref: 'Section 8.5.2 (vii)', page: '401',
+    book: 'lghp4', id: 'vapdens', title: 'Vapour density from the ideal gas laws', ref: 'Section 8.5.2 (vii)', page: '401',
     inputs: [['tv', 'Average temperature of vapour', '°C'], ['pv', 'Absolute pressure of vapour space', 'bara'],
       ['mm', 'Molecular mass of vapour', 'kg/kmol'], ['vol', 'Vapour volume (for the mass)', 'm³']],
     examples: [['Book example, propane at minus 38°C (page 403)', { tv: -38, pv: 1.059, mm: 44.097, vol: 4442.45 }]],
@@ -90,7 +90,7 @@ const CALCS = [
       return [['Tv', fmt(273.15 + v.tv) + ' K'], ['Vapour density Dvt', fmt(d, 3) + ' kg/m³', true], ['Vapour mass (volume × density)', fmt(d * v.vol, 0) + ' kg']]; },
   },
   {
-    id: 'vapshort', title: 'Simplified vapour allowance (fully-refrigerated LPG)', ref: 'Section 8.5.2', page: '402',
+    book: 'lghp4', id: 'vapshort', title: 'Simplified vapour allowance (fully-refrigerated LPG)', ref: 'Section 8.5.2', page: '402',
     inputs: [['liq', 'Weight in air of liquid transferred', 't']],
     examples: [['1,000 tonnes', { liq: 1000 }]],
         formula: ['Vapour weight in air ≈ 0.43% × liquid weight in air transferred'],
@@ -102,7 +102,7 @@ const CALCS = [
     run: v => [['Vapour allowance (0.43%)', fmt(v.liq * 0.0043, 3) + ' t', true]],
   },
   {
-    id: 'lngenergy', title: 'LNG energy transferred (MMBTU)', ref: 'Section 8.8.1, Figure 8.16', page: '410',
+    book: 'lghp4', id: 'lngenergy', title: 'LNG energy transferred (MMBTU)', ref: 'Section 8.8.1, Figure 8.16', page: '410',
     inputs: [['v', 'Volume of liquid cargo unloaded', 'm³'], ['d', 'Density of liquid cargo', 'kg/m³'],
       ['hm', 'Gross heating value (mass based) of the liquid', 'MJ/kg'], ['tv', 'Average vapour temperature after unloading', '°C'],
       ['p', 'Average absolute vapour pressure after unloading', 'mbar'], ['er', 'Gas to engine room, if applicable (+ loading, − unloading)', 'MMBTU']],
@@ -129,7 +129,7 @@ const CALCS = [
         ['Net delivered', fmt(gross - vap + v.er, 0) + ' MMBTU', true]]; },
   },
   {
-    id: 'lngcomp', title: 'LNG density and heating value from composition', ref: 'Section 8.8.1, Figure 8.16', page: '410',
+    book: 'lghp4', id: 'lngcomp', title: 'LNG density and heating value from composition', ref: 'Section 8.8.1, Figure 8.16', page: '410',
     inputs: [...COMPS.map((c, i) => ['x' + i, c[0] + ': mole fraction Xi', '', 'Mole fractions']),
       ...COMPS.map((c, i) => ['v' + i, c[0] + ': molar volume Vi at T1', 'm³/kmol', 'Molar volumes at the liquid temperature']),
       ['k1', 'Volume correction K1 at T1', 'm³/kmol', 'Corrections'], ['k2', 'Volume correction K2 at T1', 'm³/kmol', 'Corrections']],
@@ -160,7 +160,7 @@ const CALCS = [
         ['Hm, gross heating value (mass)', fmt(sxmh / sxm, 3) + ' MJ/kg', true], ['Hv, gross heating value (volume)', fmt(1.13285 * sxmh, 1) + ' BTU/SCF']]; },
   },
   {
-    id: 'loadlimit', title: 'IGC loading limit', ref: 'Section 7.7.8', page: '341',
+    book: 'lghp4', id: 'loadlimit', title: 'IGC loading limit', ref: 'Section 7.7.8', page: '341',
     inputs: [['fl', 'Filling limit FL', 'fraction, e.g. 0.98'], ['rr', 'ρR: density of cargo at the reference temperature', 'kg/m³'],
       ['rl', 'ρL: density of cargo at the loading temperature', 'kg/m³']],
     examples: [['Case 1: fully-pressurised, propane at 20°C, relief valves 16 bar (page 343)', { fl: 0.98, rr: 452, rl: 502 }],
@@ -179,7 +179,7 @@ const CALCS = [
     run: v => { const ll = v.fl * v.rr / v.rl; return [['Loading limit LL', fmt(ll, 3)], ['Tank may be filled to', fmt(ll * 100, 1) + '% of tank volume', true]]; },
   },
   {
-    id: 'gaslaw', title: 'Gas laws: P1V1/T1 = P2V2/T2', ref: 'Section 2.9', page: '59',
+    book: 'lghp4', id: 'gaslaw', title: 'Gas laws: P1V1/T1 = P2V2/T2', ref: 'Section 2.9', page: '59',
     inputs: [['p1', 'P1 (absolute)', 'bar'], ['v1', 'V1', 'm³'], ['t1', 'T1', '°C'], ['p2', 'P2 (absolute)', 'bar'], ['t2', 'T2', '°C']],
     examples: [['Example: 100 m³ at 1 bar, 0°C compressed to 5 bar at 30°C', { p1: 1, v1: 100, t1: 0, p2: 5, t2: 30 }]],
         formula: ['P1 × V1 / T1 = P2 × V2 / T2', 'Boyle (T constant): P1 × V1 = P2 × V2', 'Charles (P constant): V1/T1 = V2/T2', 'Pressure law (V constant): P1/T1 = P2/T2'],

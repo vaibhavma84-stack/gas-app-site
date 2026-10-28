@@ -1,7 +1,7 @@
-// A private reading copy of LGHP4. The book is published only in encrypted
-// form (data/*.bin, AES-GCM); the passphrase unlocks it on the phone, and the
-// key is kept on the phone so it is asked for once. Everything is cached for
-// offline use. No analytics, no other network requests.
+// A private library of the owner's gas books. Everything from the books is
+// published only in encrypted form (data/*.bin, AES-GCM); the passphrase
+// unlocks it on the phone, and the key is kept on the phone so it is asked for
+// once. Everything is cached for offline use. No analytics, no other requests.
 'use strict';
 
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -11,11 +11,12 @@ const CACHE = 'gas-data-v1';
 // Inside the Android app the data is part of the app itself: nothing to cache.
 const NATIVE = new URLSearchParams(location.search).has('android');
 
-let BOOK = null;          // { contents, pages, figures }
+let LIB = [];             // [{ id, title, short, edition, publisher, pages, cover }]
+const BOOKS = {};         // id -> { contents, pages, figures, crops }
 let KEY = null;           // CryptoKey
 let META = null;          // data/meta.json
 
-// ---------- storage of the key (IndexedDB, this phone only) ----------
+// ---------- storage (IndexedDB for the key, localStorage for the rest) ----------
 function idb() {
   return new Promise((ok, no) => {
     const r = indexedDB.open('gas', 1);
@@ -29,6 +30,9 @@ const prefs = {
   get(k, d) { try { const v = localStorage.getItem('gas.' + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
   set(k, v) { try { localStorage.setItem('gas.' + k, JSON.stringify(v)); } catch {} },
 };
+// Before the library, the last page and bookmarks belonged to the one book.
+if (prefs.get('last.lghp4', undefined) === undefined && prefs.get('last', null) !== null) prefs.set('last.lghp4', prefs.get('last', null));
+if (prefs.get('marks.lghp4', undefined) === undefined && prefs.get('marks', null)) prefs.set('marks.lghp4', prefs.get('marks', []));
 
 // ---------- crypto ----------
 const b64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
@@ -52,13 +56,15 @@ async function fetchData(path) {
   if (!r) { r = await fetch(path, { cache: 'no-cache' }); if (!r.ok) throw new Error(path + ': ' + r.status); await c.put(path, r.clone()); }
   return r.arrayBuffer();
 }
+const json = async path => JSON.parse(new TextDecoder().decode(await gunzip(await decrypt(await fetchData(path)))));
+async function imageUrl(path) { return URL.createObjectURL(new Blob([await decrypt(await fetchData(path))], { type: 'image/webp' })); }
 
 // ---------- start ----------
 async function start() {
   if (!NATIVE && 'serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
   try {
     META = JSON.parse(new TextDecoder().decode(await fetchData('data/meta.json')));
-  } catch (e) { return fatal('The book data could not be loaded. Open the app once with a connection.'); }
+  } catch (e) { return fatal('The library could not be loaded. Open the app once with a connection.'); }
   const stored = await kvGet('key');
   if (stored && stored.v === META.version) {
     KEY = stored.k;
@@ -69,7 +75,7 @@ async function start() {
 function fatal(msg) { app.innerHTML = `<div class="lock"><h2>Gas</h2><p>${esc(msg)}</p></div>`; }
 
 function lockScreen(err) {
-  app.innerHTML = `<div class="lock"><h2>LGHP4, private copy</h2>
+  app.innerHTML = `<div class="lock"><h2>Gas library, private copy</h2>
     <p class="hint">Enter your passphrase. It is needed once on this phone.</p>
     <input id="pass" type="password" autocomplete="current-password" autocapitalize="none" spellcheck="false">
     <button class="btn fill wide" id="go">Unlock</button>
@@ -81,7 +87,7 @@ function lockScreen(err) {
       await decrypt(b64(META.check), k);
       KEY = k; await kvSet('key', { v: META.version, k });
       await load();
-    } catch { lockScreen('That passphrase does not open the book.'); }
+    } catch { lockScreen('That passphrase does not open the library.'); }
   };
   $('#go').onclick = go;
   $('#pass').onkeydown = e => { if (e.key === 'Enter') go(); };
@@ -89,27 +95,58 @@ function lockScreen(err) {
 }
 
 async function load() {
-  app.innerHTML = `<div class="lock"><p class="hint">Opening the book…</p></div>`;
-  BOOK = JSON.parse(new TextDecoder().decode(await gunzip(await decrypt(await fetchData('data/book.bin')))));
-  BOOK.pages.forEach((p, i) => { p.i = i; });
+  app.innerHTML = `<div class="lock"><p class="hint">Opening the library…</p></div>`;
+  LIB = (await json('data/library.bin')).books;
   window.onhashchange = route;
   route();
   offline();
 }
+async function getBook(id) {
+  if (BOOKS[id]) return BOOKS[id];
+  const b = await json(`data/${id}/book.bin`);
+  b.pages.forEach((p, i) => { p.i = i; });
+  return (BOOKS[id] = b);
+}
+const D = (id, rel) => `data/${id}/${rel}`;
 
-// Keep every page scan on the phone, so the original pages work offline too.
+// Keep every page scan and figure on the phone, so they work offline too.
 async function offline() {
-  if (NATIVE || prefs.get('offline', '') === META.version) return;
+  if (NATIVE || prefs.get('offline', '') === META.build) return;
   const c = await caches.open(CACHE);
-  let done = 0; const all = [...Object.keys(BOOK.crops || {}).map(k => `data/figs/${encodeURIComponent(k)}.bin`), ...BOOK.pages.map(p => `data/scans/${p.scan}.bin`)];
+  const all = Object.keys(META.files || {}).filter(p => !p.endsWith('book.bin') && !p.endsWith('library.bin')).map(p => p.replace(/\+/g, '%2B'));
+  let done = 0;
   for (const path of all) {
-    if (!(await c.match(path))) {
-      try { const r = await fetch(path); if (r.ok) await c.put(path, r); } catch { return; }
+    const dec = path.replace(/%2B/g, '+');
+    if (!(await c.match(dec))) {
+      try { const r = await fetch(path); if (r.ok) await c.put(dec, r); } catch { return; }
     }
     done++;
-    const bar = $('#dl'); if (bar) bar.innerHTML = done < all.length ? `<p class="hint">Saving the original pages for offline use: ${done} of ${all.length}</p><div class="prog"><div style="width:${100 * done / all.length}%"></div></div>` : '';
+    const bar = $('#dl'); if (bar) bar.innerHTML = done < all.length ? `<p class="hint">Saving the books for offline use: ${done} of ${all.length}</p><div class="prog"><div style="width:${100 * done / all.length}%"></div></div>` : '';
   }
-  prefs.set('offline', META.version);
+  prefs.set('offline', META.build);
+}
+
+// ---------- updates ----------
+// iPhone (web): fetch the newest data list, drop only the files that changed,
+// refresh the app files and reload. Android: the books are inside the APK, so
+// open the download page for the newest APK.
+const RELEASES = 'https://github.com/vaibhavma84-stack/gas-app/releases/latest';
+async function checkUpdate() {
+  const msg = $('#upd');
+  if (NATIVE) { location.href = RELEASES; return; }
+  msg.textContent = 'Checking…';
+  let fresh;
+  try { fresh = await (await fetch('data/meta.json', { cache: 'no-store' })).json(); }
+  catch { msg.textContent = 'No connection. Try again when online.'; return; }
+  if (fresh.build === META.build) { msg.textContent = 'You have the latest version.'; return; }
+  msg.textContent = 'Updating…';
+  const c = await caches.open(CACHE);
+  const was = META.files || {}, now = fresh.files || {};
+  for (const path of new Set([...Object.keys(was), ...Object.keys(now)])) if (was[path] !== now[path]) await c.delete(path);
+  await c.put('data/meta.json', new Response(JSON.stringify(fresh), { headers: { 'Content-Type': 'application/json' } }));
+  for (const k of await caches.keys()) if (k.startsWith('gas-shell-')) await caches.delete(k);
+  try { const reg = await navigator.serviceWorker.getRegistration(); if (reg) await reg.update(); } catch {}
+  location.reload();
 }
 
 // ---------- helpers ----------
@@ -123,10 +160,10 @@ function pageText(p) {
   p._f = fold(p._t);
   return p._t;
 }
-function indexOf(label) { const i = BOOK.pages.findIndex(p => p.label.toLowerCase() === String(label).trim().toLowerCase()); return i < 0 ? null : i; }
-function sectionOf(p) {
+function indexOf(B, label) { const i = B.pages.findIndex(p => p.label.toLowerCase() === String(label).trim().toLowerCase()); return i < 0 ? null : i; }
+function sectionOf(B, p) {
   let best = null;
-  for (const e of BOOK.contents) { const i = indexOf(e[3]); if (i === null) continue; if (i <= p.i) best = e; else break; }
+  for (const e of B.contents) { const i = indexOf(B, e[3]); if (i === null) continue; if (i <= p.i) best = e; else break; }
   return best;
 }
 // Escape, apply **bold**, then highlight search words.
@@ -143,146 +180,200 @@ function bar(title, sub, back = true) {
   return `<div class="bar">${back ? '<button class="back" onclick="history.back()">‹</button>' : ''}
     <div class="titles"><h1>${esc(title)}</h1>${sub ? `<div class="sub">${esc(sub)}</div>` : ''}</div></div>`;
 }
-function search(q) {
+function search(B, q) {
   const ts = terms(q); if (!ts.length) return [];
   const phrase = ts.join(' '), hits = [];
   const count = (s, t) => { let n = 0, i = s.indexOf(t); while (i >= 0) { n++; i = s.indexOf(t, i + t.length); } return n; };
-  for (const p of BOOK.pages) {
+  for (const p of B.pages) {
     pageText(p);
     if (ts.some(t => !p._f.includes(t))) continue;
     let score = ts.reduce((s, t) => s + count(p._f, t), 0);
     if (ts.length > 1) score += 20 * count(p._f, phrase);
     const flat = p._t.replace(/\n/g, ' '), at = Math.max(0, fold(flat).indexOf(ts[0]));
     const from = Math.max(0, at - 60), to = Math.min(flat.length, at + 140);
-    hits.push({ p, score, snip: (from ? '…' : '') + flat.slice(from, to).trim() + (to < flat.length ? '…' : '') });
+    hits.push({ B, p, score, snip: (from ? '…' : '') + flat.slice(from, to).trim() + (to < flat.length ? '…' : '') });
   }
   return hits.sort((a, b) => b.score - a.score || a.p.i - b.p.i);
 }
+const card = (href, t, s, indent = 0) => `<a class="card" href="${href}" style="margin-left:${indent}px"><div class="t">${t}</div>${s ? `<div class="s">${s}</div>` : ''}</a>`;
 
 // ---------- routes ----------
-function route() {
+// #/                      the library        #/calc/<id>       a calculator
+// #/b/<book>              a book             #/b/<book>/p/<i>  a page
+// #/b/<book>/scan/<i>     original page      #/b/<book>/fig/<k> a figure
+let NAV_DIR = 0;
+async function route() {
   const h = location.hash.slice(1) || '/';
   const [path, qs] = h.split('?');
   const q = new URLSearchParams(qs || '');
   const parts = path.split('/').filter(Boolean);
   window.scrollTo(0, 0);
-  if (parts[0] === 'p') return pageView(+parts[1], q.get('q') || '');
-  if (parts[0] === 'scan') return scanView(+parts[1]);
-  if (parts[0] === 'fig') return figView(decodeURIComponent(parts[1] || ''));
   if (parts[0] === 'calc') return calcView(parts[1]);
-  home(q.get('tab') || prefs.get('tab', 'Contents'));
+  if (parts[0] === 'b' && parts[1]) {
+    let B; try { B = await getBook(parts[1]); } catch { return go('/'); }
+    if (parts[2] === 'p') return pageView(B, +parts[3], q.get('q') || '');
+    if (parts[2] === 'scan') return scanView(B, +parts[3]);
+    if (parts[2] === 'fig') return figView(B, decodeURIComponent(parts[3] || ''));
+    return bookHome(B, q.get('tab') || prefs.get('tab', 'Contents'));
+  }
+  library(q.get('tab') || prefs.get('ltab', 'Books'));
 }
 const go = h => { location.hash = h; };
 
+// ---------- the library ----------
 let searchTimer = null;
-function home(tab) {
-  const last = prefs.get('last', null);
-  app.innerHTML = bar('Liquefied Gas Handling Principles', 'LGHP4, 4th edition · private copy', false) +
-    `<div class="wrap"><input class="search" id="q" type="search" placeholder="Search the book" value="${esc(prefs.get('q', ''))}">
+function library(tab) {
+  app.innerHTML = bar('Gas library', `${LIB.length} book${LIB.length === 1 ? '' : 's'} · private copy`, false) +
+    `<div class="wrap"><input class="search" id="q" type="search" placeholder="Search every book" value="${esc(prefs.get('lq', ''))}">
     <div id="dl"></div>
-    ${last !== null && BOOK.pages[last] ? `<a class="btn fill wide" href="#/p/${last}">Continue reading: page ${esc(BOOK.pages[last].label)}</a>` : ''}
-    <div class="tabs">${['Contents', 'Figures', 'Calculations', 'Bookmarks', 'Go to page'].map(t => `<button class="btn ${t === tab ? 'on' : ''}" data-tab="${t}">${t}</button>`).join('')}</div>
-    <div id="list"></div></div>`;
-  app.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => { prefs.set('tab', b.dataset.tab); home(b.dataset.tab); });
+    <div class="tabs">${['Books', 'Calculations'].map(t => `<button class="btn ${t === tab ? 'on' : ''}" data-tab="${t}">${t}</button>`).join('')}</div>
+    <div id="list"></div>
+    <div style="margin-top:28px;text-align:center"><button class="btn" id="updb">${NATIVE ? 'Get the newest version' : 'Check for updates'}</button>
+    <p class="hint" id="upd">${NATIVE ? 'Opens the download page for the newest Android app.' : 'Version ' + esc(META.build || '')}</p></div></div>`;
+  $('#updb').onclick = checkUpdate;
+  app.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => { prefs.set('ltab', b.dataset.tab); library(b.dataset.tab); });
   const list = $('#list');
-  const show = () => {
-    const q = $('#q').value.trim(); prefs.set('q', q);
+  const show = async () => {
+    const q = $('#q').value.trim(); prefs.set('lq', q);
     $('.tabs').style.display = q.length >= 2 ? 'none' : '';
-    if (q.length >= 2) return results(list, q);
-    ({ Contents: contents, Figures: figures, Calculations: calcList, Bookmarks: bookmarks, 'Go to page': goTo }[tab] || contents)(list);
+    if (q.length >= 2) {
+      const all = []; for (const b of LIB) all.push(...search(await getBook(b.id), q));
+      return results(list, q, all.sort((a, b) => b.score - a.score), true);
+    }
+    if (tab === 'Calculations') return calcList(list);
+    shelf(list);
   };
   $('#q').oninput = () => { clearTimeout(searchTimer); searchTimer = setTimeout(show, 250); };
   show();
 }
-const card = (href, t, s, indent = 0) => `<a class="card" href="${href}" style="margin-left:${indent}px"><div class="t">${t}</div>${s ? `<div class="s">${s}</div>` : ''}</a>`;
-
-function contents(list) {
-  list.innerHTML = BOOK.contents.map(([lv, num, title, page]) => {
-    const i = indexOf(page), t = esc(num ? num + '  ' + title : title);
-    if (lv === 0) return i === null ? `<span class="chap">${t}</span>` : `<a class="chap" href="#/p/${i}">${t}</a>`;
-    return card(i === null ? 'javascript:void 0' : `#/p/${i}`, t, i === null ? `page ${esc(page)} · not in the scan` : `page ${esc(page)}`, (lv - 1) * 14);
-  }).join('');
-}
-function figures(list) {
-  const crops = Object.entries(BOOK.crops || {});
-  list.innerHTML = `<p class="hint">Every figure in the book, in order. Tap one to see it.</p>` +
-    crops.map(([k, c]) => card(`#/fig/${encodeURIComponent(k)}`, esc(c.caption), 'page ' + esc(c.page))).join('');
-}
-// The crop holding figure id ("2.21"), if the book's figure was cut from the scan.
-function cropFor(id) {
-  for (const [k, c] of Object.entries(BOOK.crops || {})) if (c.ids.includes(id)) return k;
-  return null;
-}
-const figImg = k => `<img class="bookfig" data-fig="${esc(k)}" alt="">`;
-async function loadFigs() {
-  for (const img of app.querySelectorAll('img[data-fig]')) {
-    try {
-      const buf = await decrypt(await fetchData(`data/figs/${encodeURIComponent(img.dataset.fig)}.bin`));
-      img.src = URL.createObjectURL(new Blob([buf], { type: 'image/webp' }));
-    } catch { img.replaceWith(Object.assign(document.createElement('div'), { className: 'nofig', textContent: 'Figure not saved on the phone yet. Open the app once with a connection.' })); }
-  }
-}
-function figView(k) {
-  const c = (BOOK.crops || {})[k]; if (!c) return go('/');
-  const i = BOOK.pages.findIndex(p => p.scan === c.seq);
-  app.innerHTML = bar('Figure ' + c.ids.join(' and '), 'page ' + c.page) +
-    `<div class="wrap page"><figure>${figImg(k)}<figcaption>${esc(c.caption)}</figcaption></figure>
-    ${i >= 0 ? `<a class="btn fill wide" href="#/p/${i}">Open the page</a>` : ''}</div>`;
-  loadFigs();
+function shelf(list) {
+  list.innerHTML = `<div class="shelf">${LIB.map(b => {
+    const last = prefs.get('last.' + b.id, null);
+    return `<a class="book" href="#/b/${b.id}"><div class="cover"><img data-src="${D(b.id, 'scans/' + b.cover + '.bin')}" alt=""></div>
+      <div class="btitle">${esc(b.title)}</div><div class="bsub">${esc([b.short, b.edition].filter(Boolean).join(' · '))}</div>
+      ${last !== null ? `<div class="bsub">Reading: page ${esc(last + 1)} of ${b.pages}</div>` : ''}</a>`;
+  }).join('')}</div>`;
+  for (const img of list.querySelectorAll('img[data-src]')) imageUrl(img.dataset.src).then(u => { img.src = u; }).catch(() => {});
 }
 function calcList(list) {
-  list.innerHTML = `<p class="hint">The book's numericals as working calculators. Each one can be filled with the book's own worked example.</p>` +
-    CALCS.map(c => card(`#/calc/${c.id}`, esc(c.title), `${esc(c.ref)} · page ${esc(c.page)}`)).join('');
-}
-function bookmarks(list) {
-  const marks = prefs.get('marks', []).slice().sort((a, b) => a - b);
-  list.innerHTML = marks.length ? marks.filter(i => BOOK.pages[i]).map(i => {
-    const s = sectionOf(BOOK.pages[i]); return card(`#/p/${i}`, 'Page ' + esc(BOOK.pages[i].label), s ? esc(s[1] + '  ' + s[2]) : '');
-  }).join('') : `<p class="hint">No bookmarks yet. Tap ☆ on any page to add one.</p>`;
-}
-function goTo(list) {
-  list.innerHTML = `<input class="search" id="pg" inputmode="text" placeholder="Page number, e.g. 44 or xv" style="text-align:center;margin-top:12px">
-    <button class="btn fill wide" id="pgo">Open page</button><p class="hint" id="pmsg"></p>`;
-  const f = () => { const i = indexOf($('#pg').value); if (i !== null) go(`/p/${i}`); else $('#pmsg').textContent = `Page ${$('#pg').value} is not in the scan.`; };
-  $('#pgo').onclick = f; $('#pg').onkeydown = e => { if (e.key === 'Enter') f(); };
-}
-function results(list, q) {
-  const hits = search(q), ts = terms(q);
-  list.innerHTML = `<p class="hint">${hits.length ? hits.length + ' pages' : `No page contains “${esc(q)}”.`}</p>` +
-    hits.slice(0, 200).map(h => { const s = sectionOf(h.p);
-      return card(`#/p/${h.p.i}?q=${encodeURIComponent(q)}`, rich(h.snip, ts), 'page ' + esc(h.p.label) + (s ? ' · ' + esc(s[1] + ' ' + s[2]) : '')); }).join('');
+  list.innerHTML = `<p class="hint">The numericals from the books as working calculators. Each shows its formula, what every term means, and can be filled with the book's own worked example.</p>` +
+    CALCS.map(c => { const b = LIB.find(x => x.id === c.book);
+      return card(`#/calc/${c.id}`, esc(c.title), `From: ${b ? esc(b.short || b.title) + ', ' : ''}${esc(c.ref)}, page ${esc(c.page)}`); }).join('');
 }
 
-// ---------- a page ----------
-function pageView(i, q) {
-  const p = BOOK.pages[i]; if (!p) return go('/');
-  prefs.set('last', i);
-  const ts = terms(q), s = sectionOf(p);
-  const marks = prefs.get('marks', []), marked = marks.includes(i);
+// ---------- a book ----------
+function bookHome(B, tab) {
+  const last = prefs.get('last.' + B.id, null);
+  app.innerHTML = bar(B.short || B.title, B.title) +
+    `<div class="wrap"><div class="bookhead"><div class="cover small"><img id="cov" alt=""></div>
+      <div><div class="btitle big">${esc(B.title)}</div><div class="bsub">${esc([B.publisher, B.edition].filter(Boolean).join(' · '))}</div>
+      <div class="bsub">${B.pages.length} pages</div></div></div>
+    ${last !== null && B.pages[last] ? `<a class="btn fill wide" href="#/b/${B.id}/p/${last}">Continue reading: page ${esc(B.pages[last].label)}</a>` : `<a class="btn fill wide" href="#/b/${B.id}/p/0">Open the book</a>`}
+    <input class="search" id="q" type="search" placeholder="Search this book" value="${esc(prefs.get('q.' + B.id, ''))}" style="margin-top:8px">
+    <div class="tabs">${['Contents', 'Figures', 'Bookmarks', 'Go to page'].map(t => `<button class="btn ${t === tab ? 'on' : ''}" data-tab="${t}">${t}</button>`).join('')}</div>
+    <div id="list"></div></div>`;
+  imageUrl(D(B.id, 'scans/' + B.pages[0].scan + '.bin')).then(u => { $('#cov').src = u; }).catch(() => {});
+  app.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => { prefs.set('tab', b.dataset.tab); bookHome(B, b.dataset.tab); });
+  const list = $('#list');
+  const show = () => {
+    const q = $('#q').value.trim(); prefs.set('q.' + B.id, q);
+    $('.tabs').style.display = q.length >= 2 ? 'none' : '';
+    if (q.length >= 2) return results(list, q, search(B, q), false);
+    ({ Contents: contents, Figures: figures, Bookmarks: bookmarks, 'Go to page': goTo }[tab] || contents)(B, list);
+  };
+  $('#q').oninput = () => { clearTimeout(searchTimer); searchTimer = setTimeout(show, 250); };
+  show();
+}
+function contents(B, list) {
+  list.innerHTML = B.contents.map(([lv, num, title, page]) => {
+    const i = indexOf(B, page), t = esc(num ? num + '  ' + title : title);
+    if (lv === 0) return i === null ? `<span class="chap">${t}</span>` : `<a class="chap" href="#/b/${B.id}/p/${i}">${t}</a>`;
+    return card(i === null ? 'javascript:void 0' : `#/b/${B.id}/p/${i}`, t, i === null ? `page ${esc(page)} · not in the scan` : `page ${esc(page)}`, (lv - 1) * 14);
+  }).join('');
+}
+function figures(B, list) {
+  const crops = Object.entries(B.crops || {});
+  list.innerHTML = `<p class="hint">Every figure in the book, in order. Tap one to see it.</p>` +
+    crops.map(([k, c]) => card(`#/b/${B.id}/fig/${encodeURIComponent(k)}`, esc(c.caption), 'page ' + esc(c.page))).join('');
+}
+function bookmarks(B, list) {
+  const marks = prefs.get('marks.' + B.id, []).slice().sort((a, b) => a - b);
+  list.innerHTML = marks.length ? marks.filter(i => B.pages[i]).map(i => {
+    const s = sectionOf(B, B.pages[i]); return card(`#/b/${B.id}/p/${i}`, 'Page ' + esc(B.pages[i].label), s ? esc(s[1] + '  ' + s[2]) : '');
+  }).join('') : `<p class="hint">No bookmarks yet. Tap ☆ on any page to add one.</p>`;
+}
+function goTo(B, list) {
+  list.innerHTML = `<input class="search" id="pg" inputmode="text" placeholder="Page number, e.g. 44 or xv" style="text-align:center;margin-top:12px">
+    <button class="btn fill wide" id="pgo">Open page</button><p class="hint" id="pmsg"></p>`;
+  const f = () => { const i = indexOf(B, $('#pg').value); if (i !== null) go(`/b/${B.id}/p/${i}`); else $('#pmsg').textContent = `Page ${$('#pg').value} is not in the scan.`; };
+  $('#pgo').onclick = f; $('#pg').onkeydown = e => { if (e.key === 'Enter') f(); };
+}
+function results(list, q, hits, withBook) {
+  const ts = terms(q);
+  list.innerHTML = `<p class="hint">${hits.length ? hits.length + ' pages' : `No page contains “${esc(q)}”.`}</p>` +
+    hits.slice(0, 200).map(h => { const s = sectionOf(h.B, h.p);
+      return card(`#/b/${h.B.id}/p/${h.p.i}?q=${encodeURIComponent(q)}`, rich(h.snip, ts),
+        (withBook ? esc(h.B.short || h.B.title) + ' · ' : '') + 'page ' + esc(h.p.label) + (s ? ' · ' + esc(s[1] + ' ' + s[2]) : '')); }).join('');
+}
+
+// ---------- figures cut from the scans ----------
+function cropFor(B, id) {
+  for (const [k, c] of Object.entries(B.crops || {})) if (c.ids.includes(id)) return k;
+  return null;
+}
+const figImg = (B, k) => `<img class="bookfig" data-src="${esc(D(B.id, 'figs/' + k + '.bin'))}" alt="">`;
+async function loadImages() {
+  for (const img of app.querySelectorAll('img.bookfig[data-src]')) {
+    try { img.src = await imageUrl(img.dataset.src); }
+    catch { img.replaceWith(Object.assign(document.createElement('div'), { className: 'nofig', textContent: 'Not saved on the phone yet. Open the app once with a connection.' })); }
+  }
+}
+function figView(B, k) {
+  const c = (B.crops || {})[k]; if (!c) return go(`/b/${B.id}`);
+  const i = B.pages.findIndex(p => p.scan === c.seq);
+  app.innerHTML = bar('Figure ' + c.ids.join(' and '), (B.short || '') + ' · page ' + c.page) +
+    `<div class="wrap page"><figure>${figImg(B, k)}<figcaption>${esc(c.caption)}</figcaption></figure>
+    ${i >= 0 ? `<a class="btn fill wide" href="#/b/${B.id}/p/${i}">Open the page</a>` : ''}</div>`;
+  loadImages();
+}
+
+// ---------- a page, laid out like the printed page ----------
+function pageView(B, i, q) {
+  const p = B.pages[i]; if (!p) return go(`/b/${B.id}`);
+  prefs.set('last.' + B.id, i);
+  const ts = terms(q), s = sectionOf(B, p);
+  const marks = prefs.get('marks.' + B.id, []), marked = marks.includes(i);
   let h = '';
   if (!p.proof) h += `<div class="draft">Draft text read by OCR, not yet checked against the book. Words may be missing or wrong: tap Original page to see the scan.</div>`;
-  for (const b of p.b) h += block(b, ts);
+  for (const b of p.b) h += block(B, b, ts);
   if (!p.proof) {
-    const here = Object.entries(BOOK.crops || {}).filter(([, c]) => c.seq === p.scan);
-    if (here.length) h += `<div class="grp" style="margin-top:20px">Figures on this page</div>` + here.map(([k, c]) => `<figure>${figImg(k)}<figcaption>${esc(c.caption)}</figcaption></figure>`).join('');
+    const here = Object.entries(B.crops || {}).filter(([, c]) => c.seq === p.scan);
+    if (here.length) h += `<div class="grp" style="margin-top:20px">Figures on this page</div>` + here.map(([k, c]) => `<figure>${figImg(B, k)}<figcaption>${esc(c.caption)}</figcaption></figure>`).join('');
   }
   const qs = q ? '?q=' + encodeURIComponent(q) : '';
-  app.innerHTML = bar('Page ' + p.label, s ? (s[1] + '  ' + s[2]).trim() : '') +
-    `<div class="wrap page" id="pg">${h}</div>
-    <div class="nav"><a class="btn" ${i > 0 ? `href="#/p/${i - 1}${qs}"` : ''}>‹ Prev</a>
-      <a class="btn" style="flex:1.6" href="#/scan/${i}">Original page</a>
+  const head = s ? (s[1] ? s[1] + '  ' : '') + s[2] : (B.short || B.title);
+  const turn = NAV_DIR > 0 ? ' turn-next' : NAV_DIR < 0 ? ' turn-prev' : ''; NAV_DIR = 0;
+  app.innerHTML = bar(B.short || B.title, 'Page ' + p.label + ' · ' + (i + 1) + ' of ' + B.pages.length) +
+    `<div class="desk"><article class="sheet${turn}" id="pg">
+      <div class="runhead">${esc(head)}</div>
+      <div class="page">${h}</div>
+      <div class="folio">${esc(p.label)}</div></article></div>
+    <div class="nav"><a class="btn" id="prev" ${i > 0 ? `href="#/b/${B.id}/p/${i - 1}${qs}"` : ''}>‹ Prev</a>
+      <a class="btn" style="flex:1.6" href="#/b/${B.id}/scan/${i}">Original page</a>
       <button class="btn" style="flex:.6" id="mark">${marked ? '★' : '☆'}</button>
-      <a class="btn" ${i < BOOK.pages.length - 1 ? `href="#/p/${i + 1}${qs}"` : ''}>Next ›</a></div>`;
+      <a class="btn" id="next" ${i < B.pages.length - 1 ? `href="#/b/${B.id}/p/${i + 1}${qs}"` : ''}>Next ›</a></div>`;
+  $('#prev').onclick = () => { NAV_DIR = -1; };
+  $('#next').onclick = () => { NAV_DIR = 1; };
   $('#mark').onclick = () => {
-    const m = prefs.get('marks', []), k = m.indexOf(i);
+    const m = prefs.get('marks.' + B.id, []), k = m.indexOf(i);
     if (k >= 0) m.splice(k, 1); else m.push(i);
-    prefs.set('marks', m); $('#mark').textContent = k >= 0 ? '☆' : '★';
+    prefs.set('marks.' + B.id, m); $('#mark').textContent = k >= 0 ? '☆' : '★';
   };
-  swipe($('#pg'), d => { const n = i + d; if (BOOK.pages[n]) go(`/p/${n}${qs}`); });
+  swipe($('#pg'), d => { const n = i + d; if (B.pages[n]) { NAV_DIR = d; go(`/b/${B.id}/p/${n}${qs}`); } });
   const first = $('#pg mark'); if (first) first.scrollIntoView({ block: 'center' });
-  loadFigs();
+  loadImages();
 }
-function block(b, ts) {
+function block(B, b, ts) {
   const [k, t, x] = b;
   switch (k) {
     case 'h1': return `<h2 class="h1">${rich(t, ts)}</h2>`;
@@ -295,8 +386,8 @@ function block(b, ts) {
     case 'note': return `<div class="note">${rich(t, ts)}</div>`;
     case 'warn': return `<div class="warn">${rich(t, ts)}</div>`;
     case 'eq': return `<div class="eq">${rich(t, ts)}</div>`;
-    case 'fig': { const f = x && BOOK.figures[x[0]], k = x && cropFor(x[0]);
-      return `<figure>${k ? figImg(k) : f ? svg(f) : '<div class="nofig">Tap Original page to see this figure.</div>'}<figcaption>${rich(t, ts)}</figcaption></figure>`; }
+    case 'fig': { const f = x && (B.figures || {})[x[0]], c = x && cropFor(B, x[0]);
+      return `<figure>${c ? figImg(B, c) : f ? svg(f) : '<div class="nofig">Tap Original page to see this figure.</div>'}<figcaption>${rich(t, ts)}</figcaption></figure>`; }
     case 'table': return `<div class="tbl"><table>${(x || []).map((r, ri) => `<tr>${r.map(c => ri ? `<td>${rich(c, ts)}</td>` : `<th>${rich(c, ts)}</th>`).join('')}</tr>`).join('')}</table></div><div class="tcap">${rich(t, ts)}</div>`;
     case 'calc': return `<a class="btn fill wide" href="#/calc/${esc(x && x[0])}">Open calculator: ${esc(t)}</a>`;
     case 'blank': return `<p class="hint" style="text-align:center;margin-top:40px">Blank page in the book.</p>`;
@@ -346,34 +437,36 @@ function svg(f) {
 }
 
 // ---------- the original scan ----------
-async function scanView(i) {
-  const p = BOOK.pages[i]; if (!p) return go('/');
-  app.innerHTML = bar('Original page ' + p.label, 'Pinch to zoom') + `<div class="scan" id="sc"><p class="hint" style="color:#aaa;padding:20px">Loading…</p></div>`;
+async function scanView(B, i) {
+  const p = B.pages[i]; if (!p) return go(`/b/${B.id}`);
+  app.innerHTML = bar('Original page ' + p.label, (B.short || '') + ' · pinch to zoom') + `<div class="scan" id="sc"><p class="hint" style="color:#aaa;padding:20px">Loading…</p></div>`;
   try {
-    const img = await decrypt(await fetchData(`data/scans/${p.scan}.bin`));
-    const url = URL.createObjectURL(new Blob([img], { type: 'image/webp' }));
+    const url = await imageUrl(D(B.id, `scans/${p.scan}.bin`));
     $('#sc').innerHTML = `<img src="${url}" alt="Page ${esc(p.label)}">`;
   } catch { $('#sc').innerHTML = `<p class="hint" style="color:#aaa;padding:20px">This page is not saved on the phone yet. Open the app once with a connection.</p>`; }
 }
 
 // ---------- a calculator ----------
-function calcView(id) {
+async function calcView(id) {
   const c = CALCS.find(x => x.id === id); if (!c) return go('/');
-  const pi = indexOf(c.page);
-  let h = `<div class="grp">Formula</div>${c.formula.map(f => `<div class="formula">${esc(f)}</div>`).join('')}
+  let B = null; try { B = await getBook(c.book); } catch {}
+  const pi = B ? indexOf(B, c.page) : null;
+  const src = B ? `<i>${esc(B.title)}</i>${B.publisher || B.edition ? ' (' + esc([B.publisher, B.edition].filter(Boolean).join(', ')) + ')' : ''}` : esc(c.book);
+  let h = `<div class="source"><b>Source:</b> ${src}, ${esc(c.ref)}, page ${esc(c.page)}${pi !== null ? ` · <a href="#/b/${B.id}/p/${pi}">open the page</a>` : ''}</div>
+    <div class="grp">Formula</div>${c.formula.map(f => `<div class="formula">${esc(f)}</div>`).join('')}
     <div class="grp">What each term means</div><dl class="terms">${c.terms.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>
     <div class="grp">How it works</div><ol class="steps">${c.steps.map(x => `<li>${esc(x)}</li>`).join('')}</ol>
     <div class="grp">Notes</div><div class="note" style="font-weight:400;color:var(--sub)">${esc(c.note)}</div>
     <div class="grp">Calculate</div>`;
   c.examples.forEach((e, n) => { h += `<button class="btn wide" data-ex="${n}">Fill: ${esc(e[0])}</button>`; });
-  if (pi !== null) h += `<a class="btn wide" href="#/p/${pi}">Open the page in the book</a>`;
+  if (pi !== null) h += `<a class="btn wide" href="#/b/${B.id}/p/${pi}">Open the page in the book</a>`;
   let grp = '';
   for (const [k, label, unit, g] of c.inputs) {
     if (g && g !== grp) { grp = g; h += `<div class="grp">${esc(g)}</div>`; }
     h += `<div class="lab">${esc(label)}${unit ? ' (' + esc(unit) + ')' : ''}</div><input class="field" inputmode="decimal" data-k="${k}">`;
   }
   h += `<div class="grp" style="margin-top:22px">Result</div><div id="res" class="res"></div>`;
-  app.innerHTML = bar(c.title, `${c.ref} · page ${c.page}`) + `<div class="wrap page">${h}</div>`;
+  app.innerHTML = bar(c.title, `${B ? (B.short || '') + ' · ' : ''}${c.ref} · page ${c.page}`) + `<div class="wrap page">${h}</div>`;
   const fields = [...app.querySelectorAll('[data-k]')];
   const compute = () => {
     const v = {};
