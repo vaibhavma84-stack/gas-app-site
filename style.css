@@ -121,3 +121,29 @@ a.btn, a.card, a.chap { text-decoration: none; }
 .pg { display: inline-block; margin: 2px 3px; padding: 1px 8px; border-radius: 10px; background: var(--chip, #E7EDF4); color: var(--primary); text-decoration: none; font-size: 14px; }
 .pg.off { opacity: .5; }
 @media (prefers-color-scheme: dark) { .pg { background: #243244; } }
+
+/* Reading the book: the real pages */
+.reader { position: fixed; inset: 0; background: #3B342C; display: flex; flex-direction: column; color: #F3EBDD;
+  background-image: radial-gradient(ellipse at center, #4A4136 0%, #2A251F 100%); }
+.rtop, .rbot { background: rgba(20,17,13,.85); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); transition: opacity .2s; z-index: 2; }
+.rtop { display: flex; align-items: center; gap: 6px; padding: calc(env(safe-area-inset-top) + 8px) 10px 8px; }
+.rtop .back { font-size: 30px; background: none; border: 0; color: inherit; padding: 0 10px 4px 2px; }
+.rtop .titles { flex: 1; min-width: 0; } .rtop h1 { font-size: 16px; margin: 0; } .rtop .sub { font-size: 12px; opacity: .75; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rbtn { background: none; border: 0; color: inherit; font-size: 24px; padding: 4px 8px; }
+.rbot { padding: 8px 14px calc(env(safe-area-inset-bottom) + 10px); }
+.rlabel { text-align: center; font-size: 13px; opacity: .85; }
+.rbot input[type=range] { width: 100%; accent-color: #D9B26A; margin: 6px 0; }
+.rrow { display: flex; gap: 8px; justify-content: center; } .rrow .btn { background: rgba(255,255,255,.12); color: #F3EBDD; }
+.reader.bare .rtop, .reader.bare .rbot { opacity: 0; pointer-events: none; }
+.reader.bare .rtop { position: absolute; left: 0; right: 0; top: 0; } .reader.bare .rbot { position: absolute; left: 0; right: 0; bottom: 0; }
+.spread { flex: 1; display: flex; justify-content: center; align-items: center; padding: 10px; min-height: 0; perspective: 1800px; }
+.leaf { height: 100%; display: flex; align-items: center; min-width: 0; }
+.leaf img { max-height: 100%; max-width: 100%; display: block; background: #FFFDF6; box-shadow: 0 10px 28px rgba(0,0,0,.45); }
+.spread.two .leaf { flex: 1; } .spread.two .left { justify-content: flex-end; } .spread.two .right { justify-content: flex-start; }
+.spread.two .left img { box-shadow: -6px 10px 24px rgba(0,0,0,.45), inset -14px 0 18px -12px rgba(0,0,0,.4); border-radius: 4px 0 0 4px; }
+.spread.two .right img { box-shadow: 6px 10px 24px rgba(0,0,0,.45); border-radius: 0 4px 4px 0; }
+.single img { border-radius: 2px 4px 4px 2px; }
+.curl-next .leaf:last-child { animation: curlNext .38s ease-out; transform-origin: left center; }
+.curl-prev .leaf:first-child { animation: curlPrev .38s ease-out; transform-origin: right center; }
+@keyframes curlNext { from { transform: rotateY(-75deg); opacity: .3; } to { transform: none; opacity: 1; } }
+@keyframes curlPrev { from { transform: rotateY(75deg); opacity: .3; } to { transform: none; opacity: 1; } }

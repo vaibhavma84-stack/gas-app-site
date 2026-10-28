@@ -239,6 +239,7 @@ async function route() {
   if (parts[0] === 'b' && parts[1]) {
     let B; try { B = await getBook(parts[1]); } catch { return go('/'); }
     if (parts[2] === 'p') return pageView(B, +parts[3], q.get('q') || '');
+    if (parts[2] === 'read') return readView(B, +parts[3] || 0);
     if (parts[2] === 'scan') return scanView(B, +parts[3]);
     if (parts[2] === 'fig') return figView(B, decodeURIComponent(parts[3] || ''));
     return bookHome(B, q.get('tab') || prefs.get('tab', 'Contents'));
@@ -295,7 +296,7 @@ function bookHome(B, tab) {
     `<div class="wrap"><div class="bookhead"><div class="cover small"><img id="cov" alt=""></div>
       <div><div class="btitle big">${esc(B.title)}</div><div class="bsub">${esc([B.publisher, B.edition].filter(Boolean).join(' · '))}</div>
       <div class="bsub">${B.pages.length} pages</div></div></div>
-    ${last !== null && B.pages[last] ? `<a class="btn fill wide" href="#/b/${B.id}/p/${last}">Continue reading: page ${esc(B.pages[last].label)}</a>` : `<a class="btn fill wide" href="#/b/${B.id}/p/0">Open the book</a>`}
+    ${last !== null && B.pages[last] ? `<a class="btn fill wide" href="#/b/${B.id}/read/${last}">Continue reading: page ${esc(B.pages[last].label)}</a>` : `<a class="btn fill wide" href="#/b/${B.id}/read/0">Open the book</a>`}
     <input class="search" id="q" type="search" placeholder="Search this book" value="${esc(prefs.get('q.' + B.id, ''))}" style="margin-top:8px">
     <div class="tabs">${['Contents', 'Index', 'Figures', 'Bookmarks', 'Go to page'].filter(t => t !== 'Index' || (B.index || []).length).map(t => `<button class="btn ${t === tab ? 'on' : ''}" data-tab="${t}">${t}</button>`).join('')}</div>
     <div id="list"></div></div>`;
@@ -314,8 +315,8 @@ function bookHome(B, tab) {
 function contents(B, list) {
   list.innerHTML = B.contents.map(([lv, num, title, page]) => {
     const i = indexOf(B, page), t = esc(num ? num + '  ' + title : title);
-    if (lv === 0) return i === null ? `<span class="chap">${t}</span>` : `<a class="chap" href="#/b/${B.id}/p/${i}">${t}</a>`;
-    return card(i === null ? 'javascript:void 0' : `#/b/${B.id}/p/${i}`, t, i === null ? `page ${esc(page)} · not in the scan` : `page ${esc(page)}`, (lv - 1) * 14);
+    if (lv === 0) return i === null ? `<span class="chap">${t}</span>` : `<a class="chap" href="#/b/${B.id}/read/${i}">${t}</a>`;
+    return card(i === null ? 'javascript:void 0' : `#/b/${B.id}/read/${i}`, t, i === null ? `page ${esc(page)} · not in the scan` : `page ${esc(page)}`, (lv - 1) * 14);
   }).join('');
 }
 // The book's own index: every page number opens the page with the term marked.
@@ -411,7 +412,7 @@ function pageView(B, i, q) {
       <div class="page">${h}</div>
       <div class="folio">${esc(p.label)}</div></article></div>
     <div class="nav"><a class="btn" id="prev" ${i > 0 ? `href="#/b/${B.id}/p/${i - 1}${qs}"` : ''}>‹ Prev</a>
-      <a class="btn" style="flex:1.6" href="#/b/${B.id}/scan/${i}">Original page</a>
+      <a class="btn" style="flex:1.6" href="#/b/${B.id}/read/${i}">Book page</a>
       <button class="btn" style="flex:.6" id="mark">${marked ? '★' : '☆'}</button>
       <a class="btn" id="next" ${i < B.pages.length - 1 ? `href="#/b/${B.id}/p/${i + 1}${qs}"` : ''}>Next ›</a></div>`;
   $('#prev').onclick = () => { NAV_DIR = -1; };
@@ -486,6 +487,51 @@ function svg(f) {
     out.push(`<line x1="${sx}" y1="${ay}" x2="${tx}" y2="${ty}" stroke="#78746C" stroke-width=".25"/><circle cx="${tx}" cy="${ty}" r=".7" fill="#D84315"/>`);
   }
   return `<svg viewBox="0 0 100 ${f.h}" xmlns="http://www.w3.org/2000/svg">${out.join('')}</svg>`;
+}
+
+// ---------- reading the book: its real pages ----------
+// The scanned pages themselves, one at a time (two side by side when the
+// screen is wide), turned with a swipe. Tap to show or hide the controls.
+let READ_DIR = 0;
+function readView(B, i) {
+  i = Math.max(0, Math.min(B.pages.length - 1, i));
+  const wide = innerWidth > innerHeight && innerWidth >= 640;
+  // In a spread the even page sits on the left, as in the printed book.
+  let a = i, b2 = null;
+  if (wide) { const n = parseInt(B.pages[i].label, 10); if (!isNaN(n)) { a = n % 2 ? i - 1 : i; if (a < 0) a = 0; } b2 = a + 1 < B.pages.length ? a + 1 : null; }
+  const step = wide ? 2 : 1, prevI = Math.max(0, a - step), nextI = Math.min(B.pages.length - 1, (b2 ?? a) + 1);
+  prefs.set('last.' + B.id, a);
+  const s = sectionOf(B, B.pages[a]);
+  const marks = prefs.get('marks.' + B.id, []);
+  const show = prefs.get(wide ? 'chromeWide' : 'chrome', !wide);
+  const turn = READ_DIR > 0 ? ' curl-next' : READ_DIR < 0 ? ' curl-prev' : ''; READ_DIR = 0;
+  const pg = (k, side) => `<div class="leaf ${side}"><img data-src="${D(B.id, 'scans/' + B.pages[k].scan + '.bin')}" alt="Page ${esc(B.pages[k].label)}"></div>`;
+  app.innerHTML = `<div class="reader${show ? '' : ' bare'}">
+    <div class="rtop"><button class="back" id="rback">‹</button><div class="titles"><h1>${esc(B.short || B.title)}</h1>
+      <div class="sub">${esc(s ? (s[1] ? s[1] + '  ' : '') + s[2] : '')}</div></div>
+      <button class="rbtn" id="rmark">${marks.includes(a) ? '★' : '☆'}</button></div>
+    <div class="spread${turn}${b2 !== null ? ' two' : ''}" id="spread">${pg(a, b2 !== null ? 'left' : 'single')}${b2 !== null ? pg(b2, 'right') : ''}</div>
+    <div class="rbot"><div class="rlabel">Page ${esc(B.pages[a].label)}${b2 !== null ? '–' + esc(B.pages[b2].label) : ''} · ${a + 1} of ${B.pages.length}</div>
+      <input type="range" id="rslide" min="0" max="${B.pages.length - 1}" value="${a}">
+      <div class="rrow"><a class="btn" href="#/b/${B.id}?tab=Contents">Contents</a><a class="btn" href="#/b/${B.id}/p/${a}">Text</a><a class="btn" href="#/b/${B.id}/scan/${a}">Zoom</a></div></div></div>`;
+  $('#rback').onclick = () => go(`/b/${B.id}`);
+  $('#rmark').onclick = e => { e.stopPropagation(); const m = prefs.get('marks.' + B.id, []), k = m.indexOf(a); if (k >= 0) m.splice(k, 1); else m.push(a); prefs.set('marks.' + B.id, m); $('#rmark').textContent = k >= 0 ? '☆' : '★'; };
+  const turnTo = (n, d) => { if (n === a || n < 0 || n >= B.pages.length) return; READ_DIR = d; location.replace(`#/b/${B.id}/read/${n}`); };
+  const sl = $('#rslide');
+  sl.oninput = () => { $('.rlabel').textContent = 'Page ' + B.pages[+sl.value].label + ' · ' + (+sl.value + 1) + ' of ' + B.pages.length; };
+  sl.onchange = () => turnTo(+sl.value, +sl.value > a ? 1 : -1);
+  const sp = $('#spread');
+  // Tap the right or left edge to turn, the middle to show or hide the controls.
+  sp.onclick = e => {
+    const x = e.clientX / innerWidth;
+    if (x > 0.75) turnTo(nextI, 1); else if (x < 0.25) turnTo(prevI, -1);
+    else { const k = wide ? 'chromeWide' : 'chrome', v = !prefs.get(k, !wide); prefs.set(k, v); $('.reader').classList.toggle('bare', !v); }
+  };
+  swipe(sp, d => turnTo(d > 0 ? nextI : prevI, d));
+  for (const img of sp.querySelectorAll('img[data-src]')) imageUrl(img.dataset.src).then(u => { img.src = u; }).catch(() => { img.alt = 'Not saved on the phone yet'; });
+  // Get the next pages ready, so turning is instant.
+  for (const k of [nextI, nextI + 1, prevI]) if (B.pages[k]) fetchData(D(B.id, 'scans/' + B.pages[k].scan + '.bin')).catch(() => {});
+  onresize = () => { if (location.hash.includes('/read/')) readView(B, a); };
 }
 
 // ---------- the original scan ----------
