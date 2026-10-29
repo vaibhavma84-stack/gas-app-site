@@ -160,7 +160,15 @@ async function autoUpdate() {
 const RELEASES = 'https://github.com/vaibhavma84-stack/gas-app/releases/latest';
 async function checkUpdate() {
   const msg = $('#upd');
-  if (NATIVE) { location.href = RELEASES; return; }
+  if (NATIVE) {
+    if (!window.GasNative) { location.href = RELEASES; return; }
+    msg.textContent = 'Checking…';
+    window.gasUpdateDone = r => {
+      if (r === 'updated') { msg.textContent = 'Updated. Opening the new version…'; setTimeout(() => location.reload(), 600); }
+      else msg.textContent = r === 'latest' ? 'You have the latest version.' : 'No connection. Try again when online.';
+    };
+    GasNative.update(); return;
+  }
   msg.textContent = 'Checking…';
   let fresh;
   try { fresh = await (await fetch('data/meta.json', { cache: 'no-store' })).json(); }
@@ -256,8 +264,8 @@ function library(tab) {
     <div id="dl"></div>
     <div class="tabs">${['Books', 'Calculations'].map(t => `<button class="btn ${t === tab ? 'on' : ''}" data-tab="${t}">${t}</button>`).join('')}</div>
     <div id="list"></div>
-    <div style="margin-top:28px;text-align:center"><button class="btn" id="updb">${NATIVE ? 'Get the newest version' : 'Check for updates'}</button>
-    <p class="hint" id="upd">${NATIVE ? 'Opens the download page for the newest Android app.' : 'Version ' + esc(META.build || '')}</p></div></div>`;
+    <div style="margin-top:28px;text-align:center"><button class="btn" id="updb">Check for updates</button>
+    <p class="hint" id="upd">Version ${esc(META.build || '')}</p></div></div>`;
   $('#updb').onclick = checkUpdate;
   app.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => { prefs.set('ltab', b.dataset.tab); library(b.dataset.tab); });
   const list = $('#list');
