@@ -279,7 +279,7 @@ function shelf(list) {
     const last = prefs.get('last.' + b.id, null);
     return `<a class="book" href="#/b/${b.id}"><div class="cover"><img data-src="${D(b.id, 'scans/' + b.cover + '.bin')}" alt=""></div>
       <div class="btitle">${esc(b.title)}</div><div class="bsub">${esc([b.short, b.edition].filter(Boolean).join(' · '))}</div>
-      ${last !== null ? `<div class="bsub">Reading: page ${esc(last + 1)} of ${b.pages}</div>` : ''}</a>`;
+      ${last !== null ? `<div class="bsub">Reading: page ${esc(last + 1)} of ${b.pages}</div>` : ''}${b.note ? '<div class="bsub" style="color:#B7791F">Older edition</div>' : ''}</a>`;
   }).join('')}</div>`;
   for (const img of list.querySelectorAll('img[data-src]')) imageUrl(img.dataset.src).then(u => { img.src = u; }).catch(() => {});
 }
@@ -296,6 +296,7 @@ function bookHome(B, tab) {
     `<div class="wrap"><div class="bookhead"><div class="cover small"><img id="cov" alt=""></div>
       <div><div class="btitle big">${esc(B.title)}</div><div class="bsub">${esc([B.publisher, B.edition].filter(Boolean).join(' · '))}</div>
       <div class="bsub">${B.pages.length} pages</div></div></div>
+    ${B.note ? `<div class="draft">${esc(B.note)}</div>` : ''}
     ${last !== null && B.pages[last] ? `<a class="btn fill wide" href="#/b/${B.id}/read/${last}">Continue reading: page ${esc(B.pages[last].label)}</a>` : `<a class="btn fill wide" href="#/b/${B.id}/read/0">Open the book</a>`}
     <input class="search" id="q" type="search" placeholder="Search this book" value="${esc(prefs.get('q.' + B.id, ''))}" style="margin-top:8px">
     <div class="tabs">${['Contents', 'Index', 'Figures', 'Bookmarks', 'Go to page'].filter(t => t !== 'Index' || (B.index || []).length).map(t => `<button class="btn ${t === tab ? 'on' : ''}" data-tab="${t}">${t}</button>`).join('')}</div>
