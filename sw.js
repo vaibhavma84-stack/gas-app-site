@@ -1,6 +1,6 @@
 // Offline: the app files are kept on the phone and served from there first.
 // The encrypted book data is cached by the app itself (cache gas-data-v1).
-const SHELL = 'gas-shell-841b04288a';
+const SHELL = 'gas-shell-4ae1400e2d';
 const FILES = ['./', 'index.html', 'style.css', 'app.js', 'calcs.js', 'manifest.webmanifest', 'icon-180.png', 'icon-192.png', 'icon-512.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(SHELL).then(c => c.addAll(FILES)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => {
